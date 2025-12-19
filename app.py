@@ -12,7 +12,7 @@ st.set_page_config(page_title="Dashboard Gerencial", layout="wide")
 # =============================
 USUARIOS = {
     "log2025": {"senha": "material123", "perfil": "admin"},
-    "nxjl": {"senha": "testejl123", "perfil": "leitura"}
+    "nxjl": {"senha": "testejl123", "perfil": "admin"}
 }
 
 # =============================
