@@ -17,7 +17,7 @@ st.title("Dashboard Gerencial - Loja de Material de Construção")
 # -----------------------------
 @st.cache_data
 def carregar_dados():
-    df = pd.read_csv("tudo.csv")
+    df = pd.read_csv("tudo.csv", encoding="latin1", sep=",")
     
     df['criado_em'] = pd.to_datetime(df['criado_em'])
     df['atualizado_em'] = pd.to_datetime(df['atualizado_em'])
