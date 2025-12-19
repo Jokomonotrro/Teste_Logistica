@@ -3,60 +3,55 @@ import pandas as pd
 import plotly.express as px
 
 # =============================
-# CONFIGURAÇÃO DA PÁGINA
+# CONFIGURAÇÃO
 # =============================
-st.set_page_config(
-    page_title="Dashboard Gerencial - Loja de Materiais",
-    layout="wide"
-)
+st.set_page_config(page_title="Dashboard Gerencial", layout="wide")
 
 # =============================
-# LOGIN FIXO (APENAS VOCÊ CADASTRA)
+# USUÁRIOS E PERFIS
 # =============================
 USUARIOS = {
-    "log2025": "material123",
-    "nxjl": "testejl123"
+    "log2025": {"senha": "material123", "perfil": "admin"},
+    "nxjl": {"senha": "testejl123", "perfil": "leitura"}
 }
 
+# =============================
+# LOGIN
+# =============================
 def tela_login():
     st.markdown("## Bem-vindo")
-    st.markdown("### Acesso ao Dashboard Gerencial")
-
     login = st.text_input("Login")
     senha = st.text_input("Senha", type="password")
 
     if st.button("Entrar"):
-        if login in USUARIOS and USUARIOS[login] == senha:
-            st.session_state["autenticado"] = True
+        if login in USUARIOS and USUARIOS[login]["senha"] == senha:
+            st.session_state["auth"] = True
             st.session_state["usuario"] = login
+            st.session_state["perfil"] = USUARIOS[login]["perfil"]
             st.rerun()
         else:
             st.error("Login ou senha inválidos")
 
-# =============================
-# CONTROLE DE SESSÃO
-# =============================
-if "autenticado" not in st.session_state:
-    st.session_state["autenticado"] = False
+if "auth" not in st.session_state:
+    st.session_state["auth"] = False
 
-if not st.session_state["autenticado"]:
+if not st.session_state["auth"]:
     tela_login()
     st.stop()
 
 # =============================
-# TELA PRINCIPAL
+# LOGOUT
 # =============================
-st.success(f"Usuário autenticado: {st.session_state['usuario']}")
-st.title("Dashboard Gerencial - Loja de Material de Construção")
+if st.sidebar.button("Logout"):
+    st.session_state.clear()
+    st.rerun()
 
 # =============================
-# UPLOAD DO ARQUIVO
+# UPLOAD
 # =============================
-st.sidebar.header("Importação de Dados")
-
 arquivo = st.sidebar.file_uploader(
-    "Importe a base (.csv, .xlsx, .xls)",
-    type=["csv", "xlsx", "xls"]
+    "Importar base (.csv, .xls, .xlsx)",
+    type=["csv", "xls", "xlsx"]
 )
 
 @st.cache_data
@@ -69,18 +64,17 @@ def carregar_dados(upload):
     else:
         df = pd.read_excel(upload)
 
-    # Conversões
-    df['criado_em'] = pd.to_datetime(df['criado_em'], errors='coerce', dayfirst=True)
-    df['atualizado_em'] = pd.to_datetime(df['atualizado_em'], errors='coerce', dayfirst=True)
-    df['quantidade'] = pd.to_numeric(df['quantidade'], errors='coerce')
-    df['preço_y'] = pd.to_numeric(df['preço_y'], errors='coerce')
-    df['preço_x'] = pd.to_numeric(df['preço_x'], errors='coerce')
+    df['criado_em'] = pd.to_datetime(df['criado_em'], dayfirst=True, errors="coerce")
+    df['quantidade'] = pd.to_numeric(df['quantidade'], errors="coerce")
+    df['preço_y'] = pd.to_numeric(df['preço_y'], errors="coerce")
+    df['preço_x'] = pd.to_numeric(df['preço_x'], errors="coerce")
 
     df['faturamento'] = df['quantidade'] * df['preço_y']
+    df['margem'] = (df['preço_y'] - df['preço_x']) * df['quantidade']
     return df
 
 if not arquivo:
-    st.warning("Importe um arquivo para iniciar o dashboard.")
+    st.warning("Importe um arquivo para continuar")
     st.stop()
 
 df = carregar_dados(arquivo)
@@ -88,64 +82,88 @@ df = carregar_dados(arquivo)
 # =============================
 # FILTROS
 # =============================
-st.sidebar.header("Filtros")
+produto = st.sidebar.selectbox("Produto", df['produto'].unique())
 
-produto_selecionado = st.sidebar.selectbox(
-    "Produto",
-    df['produto'].unique()
-)
-
-data_inicio = st.sidebar.date_input(
-    "Data inicial",
-    df['criado_em'].min()
-)
-
-data_fim = st.sidebar.date_input(
-    "Data final",
-    df['criado_em'].max()
-)
-
-df_filtrado = df[
-    (df['produto'] == produto_selecionado) &
-    (df['criado_em'].dt.date >= data_inicio) &
-    (df['criado_em'].dt.date <= data_fim)
-]
+df_f = df[df['produto'] == produto]
 
 # =============================
 # KPIs
 # =============================
-col1, col2, col3, col4 = st.columns(4)
-
-col1.metric("Quantidade Vendida", int(df_filtrado['quantidade'].sum()))
-col2.metric("Faturamento (R$)", f"{df_filtrado['faturamento'].sum():,.2f}")
-col3.metric("Preço Médio (R$)", f"{df_filtrado['preço_y'].mean():,.2f}")
-col4.metric("Total de Vendas", df_filtrado['id_da_venda'].nunique())
+c1, c2, c3 = st.columns(3)
+c1.metric("Quantidade", int(df_f['quantidade'].sum()))
+c2.metric("Faturamento", f"R$ {df_f['faturamento'].sum():,.2f}")
+c3.metric("Preço Médio", f"R$ {df_f['preço_y'].mean():,.2f}")
 
 # =============================
-# GRÁFICO DE VENDAS NO TEMPO
+# MARGEM (SÓ ADMIN)
 # =============================
-st.subheader("Evolução de Vendas")
+if st.session_state["perfil"] == "admin":
+    st.metric("Margem Total", f"R$ {df_f['margem'].sum():,.2f}")
 
+# =============================
+# VENDAS NO TEMPO
+# =============================
 df_tempo = (
-    df_filtrado
-    .groupby(df_filtrado['criado_em'].dt.strftime("%d/%m/%Y"))
+    df_f.groupby(df_f['criado_em'].dt.date)
     .agg({'quantidade': 'sum'})
     .reset_index()
 )
 
-fig_tempo = px.line(
+fig_vendas = px.line(df_tempo, x='criado_em', y='quantidade')
+st.plotly_chart(fig_vendas, use_container_width=True)
+
+# =============================
+# PREVISÃO – MÉDIA MÓVEL
+# =============================
+st.subheader("Previsão de Vendas (Média Móvel)")
+
+n = st.selectbox("Escolha o período da média móvel (n)", [2, 3, 4, 5, 7])
+
+df_tempo['media_movel'] = df_tempo['quantidade'].rolling(n).mean()
+
+fig_prev = px.line(
     df_tempo,
     x='criado_em',
-    y='quantidade',
-    title="Quantidade Vendida por Dia"
+    y=['quantidade', 'media_movel'],
+    labels={"value": "Quantidade"}
 )
 
-st.plotly_chart(fig_tempo, use_container_width=True)
+st.plotly_chart(fig_prev, use_container_width=True)
 
 # =============================
-# RANKING DE PRODUTOS
+# CURVA ABC (SÓ ADMIN)
 # =============================
-st.subheader("Top 10 Produtos por Faturamento")
+if st.session_state["perfil"] == "admin":
+    st.subheader("Curva ABC")
 
-ranking = (
-    df.groupby('pr
+    abc = (
+        df.groupby('produto')['faturamento']
+        .sum()
+        .sort_values(ascending=False)
+        .reset_index()
+    )
+
+    abc['perc'] = abc['faturamento'].cumsum() / abc['faturamento'].sum()
+
+    def classe(p):
+        if p <= 0.8:
+            return 'A'
+        elif p <= 0.95:
+            return 'B'
+        else:
+            return 'C'
+
+    abc['classe'] = abc['perc'].apply(classe)
+
+    fig_abc = px.bar(abc, x='produto', y='faturamento', color='classe')
+    st.plotly_chart(fig_abc, use_container_width=True)
+
+# =============================
+# TABELA FINAL
+# =============================
+df_f['criado_em'] = df_f['criado_em'].dt.strftime("%d/%m/%Y")
+
+st.dataframe(
+    df_f[['nome', 'produto', 'quantidade', 'preço_y', 'faturamento', 'criado_em']],
+    use_container_width=True
+)
