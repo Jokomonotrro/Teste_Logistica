@@ -91,29 +91,83 @@ if not arquivo:
 # LEITURA DOS DADOS
 # =============================
 @st.cache_data
+@st.cache_data
 def carregar_dados(fonte):
-    if isinstance(fonte, str):
-        df = pd.read_csv(fonte) if fonte.endswith(".csv") else pd.read_excel(fonte)
-    else:
-        df = pd.read_csv(fonte) if fonte.name.endswith(".csv") else pd.read_excel(fonte)
+    # -----------------------------
+    # LEITURA ROBUSTA DE CSV / EXCEL
+    # -----------------------------
+    def ler_csv_robusto(f):
+        try:
+            return pd.read_csv(f, encoding="utf-8")
+        except UnicodeDecodeError:
+            return pd.read_csv(
+                f,
+                encoding="latin1",
+                sep=None,
+                engine="python"
+            )
 
+    if isinstance(fonte, str):
+        if fonte.lower().endswith(".csv"):
+            df = ler_csv_robusto(fonte)
+        else:
+            df = pd.read_excel(fonte)
+    else:
+        if fonte.name.lower().endswith(".csv"):
+            df = ler_csv_robusto(fonte)
+        else:
+            df = pd.read_excel(fonte)
+
+    # -----------------------------
+    # NORMALIZAÇÃO DE COLUNAS
+    # -----------------------------
     df.columns = (
         df.columns.str.strip().str.lower()
-        .str.replace(" ", "_").str.replace("-", "_")
+        .str.replace(" ", "_")
+        .str.replace("-", "_")
+        .str.normalize("NFKD")
+        .str.encode("ascii", errors="ignore")
+        .str.decode("utf-8")
     )
 
-    obrigatorias = ["criado_em", "produto", "quantidade", "preco_y"]
-    for c in obrigatorias:
-        if c not in df.columns:
-            st.error(f"Coluna obrigatória ausente: {c}")
-            st.stop()
+    mapa = {
+        "criado_em": ["criado_em", "data", "data_criacao"],
+        "produto": ["produto", "item", "descricao"],
+        "quantidade": ["quantidade", "qtd", "qtde"],
+        "preco_y": ["preco_y", "preco_venda", "valor_venda"],
+        "preco_x": ["preco_x", "preco_custo", "valor_custo"]
+    }
 
+    for padrao, opcoes in mapa.items():
+        for o in opcoes:
+            if o in df.columns:
+                df.rename(columns={o: padrao}, inplace=True)
+                break
+
+    obrigatorias = ["criado_em", "produto", "quantidade", "preco_y"]
+    faltando = [c for c in obrigatorias if c not in df.columns]
+
+    if faltando:
+        st.error(f"Colunas obrigatórias ausentes: {faltando}")
+        st.stop()
+
+    # -----------------------------
+    # TIPAGEM
+    # -----------------------------
     df["criado_em"] = pd.to_datetime(df["criado_em"], dayfirst=True, errors="coerce")
     df["quantidade"] = pd.to_numeric(df["quantidade"], errors="coerce")
     df["preco_y"] = pd.to_numeric(df["preco_y"], errors="coerce")
 
+    if "preco_x" in df.columns:
+        df["preco_x"] = pd.to_numeric(df["preco_x"], errors="coerce")
+        df["margem"] = (df["preco_y"] - df["preco_x"]) * df["quantidade"]
+    else:
+        df["margem"] = 0
+
     df["faturamento"] = df["quantidade"] * df["preco_y"]
-    return df.dropna(subset=["criado_em"])
+
+    return df
+
 
 df = carregar_dados(arquivo)
 
