@@ -45,12 +45,21 @@ if st.sidebar.button("Logout"):
     st.rerun()
 
 # =============================
-# ESCOLHA DA FONTE DE DADOS
+# MENU LATERAL
+# =============================
+st.sidebar.header("Navegação")
+pagina = st.sidebar.radio(
+    "Ir para:",
+    ["Visão Geral", "Previsão de Demanda", "Curva ABC"]
+)
+
+# =============================
+# FONTE DE DADOS
 # =============================
 st.sidebar.header("Fonte de Dados")
 
 opcao = st.sidebar.radio(
-    "Como deseja carregar os dados?",
+    "Carregar dados:",
     ["Usar arquivo do repositório", "Enviar novo arquivo"]
 )
 
@@ -63,15 +72,10 @@ if opcao == "Usar arquivo do repositório":
     ]
 
     if not arquivos_repo:
-        st.error("Nenhum arquivo compatível encontrado no repositório.")
+        st.error("Nenhum arquivo compatível encontrado.")
         st.stop()
 
-    nome_arquivo = st.sidebar.selectbox(
-        "Arquivos disponíveis",
-        arquivos_repo
-    )
-
-    arquivo = nome_arquivo
+    arquivo = st.sidebar.selectbox("Arquivos disponíveis", arquivos_repo)
 
 else:
     arquivo = st.sidebar.file_uploader(
@@ -80,128 +84,109 @@ else:
     )
 
 if not arquivo:
-    st.warning("Selecione ou envie um arquivo para continuar.")
+    st.warning("Selecione ou envie um arquivo.")
     st.stop()
 
 # =============================
-# LEITURA ROBUSTA
+# LEITURA DOS DADOS
 # =============================
 @st.cache_data
 def carregar_dados(fonte):
     if isinstance(fonte, str):
-        if fonte.endswith(".csv"):
-            try:
-                df = pd.read_csv(fonte, encoding="utf-8")
-            except UnicodeDecodeError:
-                df = pd.read_csv(fonte, encoding="latin1")
-        else:
-            df = pd.read_excel(fonte)
+        df = pd.read_csv(fonte) if fonte.endswith(".csv") else pd.read_excel(fonte)
     else:
-        if fonte.name.endswith(".csv"):
-            try:
-                df = pd.read_csv(fonte, encoding="utf-8")
-            except UnicodeDecodeError:
-                df = pd.read_csv(fonte, encoding="latin1")
-        else:
-            df = pd.read_excel(fonte)
+        df = pd.read_csv(fonte) if fonte.name.endswith(".csv") else pd.read_excel(fonte)
 
-    # Normalização de colunas
     df.columns = (
         df.columns.str.strip().str.lower()
         .str.replace(" ", "_").str.replace("-", "_")
-        .str.normalize("NFKD")
-        .str.encode("ascii", errors="ignore")
-        .str.decode("utf-8")
     )
 
-    mapa = {
-        "criado_em": ["criado_em", "data", "data_criacao"],
-        "produto": ["produto", "item", "descricao"],
-        "quantidade": ["quantidade", "qtd", "qtde"],
-        "preco_y": ["preco_y", "preco_venda", "valor_venda"],
-        "preco_x": ["preco_x", "preco_custo", "valor_custo"]
-    }
-
-    for padrao, opcoes in mapa.items():
-        for o in opcoes:
-            if o in df.columns:
-                df.rename(columns={o: padrao}, inplace=True)
-                break
-
     obrigatorias = ["criado_em", "produto", "quantidade", "preco_y"]
-    faltando = [c for c in obrigatorias if c not in df.columns]
-
-    if faltando:
-        st.error(f"Colunas obrigatórias ausentes: {faltando}")
-        st.stop()
+    for c in obrigatorias:
+        if c not in df.columns:
+            st.error(f"Coluna obrigatória ausente: {c}")
+            st.stop()
 
     df["criado_em"] = pd.to_datetime(df["criado_em"], dayfirst=True, errors="coerce")
     df["quantidade"] = pd.to_numeric(df["quantidade"], errors="coerce")
     df["preco_y"] = pd.to_numeric(df["preco_y"], errors="coerce")
 
-    if "preco_x" in df.columns:
-        df["preco_x"] = pd.to_numeric(df["preco_x"], errors="coerce")
-        df["margem"] = (df["preco_y"] - df["preco_x"]) * df["quantidade"]
-    else:
-        df["margem"] = 0
-
     df["faturamento"] = df["quantidade"] * df["preco_y"]
-    return df
+    return df.dropna(subset=["criado_em"])
 
 df = carregar_dados(arquivo)
 
 # =============================
-# FILTRO DE PRODUTO
+# FILTRO DE PRODUTO (COM TODOS)
 # =============================
-produto = st.sidebar.selectbox("Produto", df["produto"].unique())
-df_f = df[df["produto"] == produto]
+produtos = ["Todos"] + sorted(df["produto"].unique().tolist())
+produto = st.sidebar.selectbox("Produto", produtos)
+
+if produto == "Todos":
+    df_f = df.copy()
+else:
+    df_f = df[df["produto"] == produto]
 
 # =============================
-# KPIs
+# VISÃO GERAL
 # =============================
-c1, c2, c3 = st.columns(3)
-c1.metric("Quantidade", int(df_f["quantidade"].sum()))
-c2.metric("Faturamento", f"R$ {df_f['faturamento'].sum():,.2f}")
-c3.metric("Preço Médio", f"R$ {df_f['preco_y'].mean():,.2f}")
+if pagina == "Visão Geral":
+    st.header("Visão Geral")
 
-if st.session_state["perfil"] == "admin":
-    st.metric("Margem Total", f"R$ {df_f['margem'].sum():,.2f}")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Quantidade Total", int(df_f["quantidade"].sum()))
+    c2.metric("Faturamento Total", f"R$ {df_f['faturamento'].sum():,.2f}")
+    c3.metric("Preço Médio", f"R$ {df_f['preco_y'].mean():,.2f}")
 
-# =============================
-# SÉRIE TEMPORAL
-# =============================
-df_tempo = (
-    df_f.groupby(df_f["criado_em"].dt.date)
-    .agg({"quantidade": "sum"})
-    .reset_index()
-)
+    df_tempo = (
+        df_f.groupby(df_f["criado_em"].dt.date)
+        .agg({"quantidade": "sum"})
+        .reset_index()
+        .rename(columns={"criado_em": "data"})
+    )
 
-st.plotly_chart(
-    px.line(df_tempo, x="criado_em", y="quantidade"),
-    use_container_width=True
-)
+    st.plotly_chart(
+        px.line(df_tempo, x="data", y="quantidade", title="Vendas ao longo do tempo"),
+        use_container_width=True
+    )
 
 # =============================
-# PREVISÃO – MÉDIA MÓVEL
+# PREVISÃO
 # =============================
-st.subheader("Previsão por Média Móvel")
-n = st.selectbox("Período n", [2, 3, 4, 5, 7])
-df_tempo["media_movel"] = df_tempo["quantidade"].rolling(n).mean()
+if pagina == "Previsão de Demanda":
+    st.header("Previsão de Demanda – Média Móvel")
 
-st.plotly_chart(
-    px.line(df_tempo, x="criado_em", y=["quantidade", "media_movel"]),
-    use_container_width=True
-)
+    df_tempo = (
+        df_f.groupby(df_f["criado_em"].dt.date)
+        .agg({"quantidade": "sum"})
+        .reset_index()
+        .rename(columns={"criado_em": "data"})
+    )
+
+    n = st.selectbox("Período n", [2, 3, 4, 5, 7])
+    df_tempo["media_movel"] = df_tempo["quantidade"].rolling(n).mean()
+
+    st.plotly_chart(
+        px.line(
+            df_tempo,
+            x="data",
+            y=["quantidade", "media_movel"],
+            title="Previsão por Média Móvel"
+        ),
+        use_container_width=True
+    )
 
 # =============================
-# CURVA ABC (ADMIN)
+# CURVA ABC
 # =============================
-if st.session_state["perfil"] == "admin":
-    st.subheader("Curva ABC")
+if pagina == "Curva ABC":
+    st.header("Curva ABC")
 
     abc = (
         df.groupby("produto")["faturamento"]
-        .sum().sort_values(ascending=False)
+        .sum()
+        .sort_values(ascending=False)
         .reset_index()
     )
 
@@ -216,12 +201,4 @@ if st.session_state["perfil"] == "admin":
         use_container_width=True
     )
 
-# =============================
-# TABELA FINAL
-# =============================
-df_f["criado_em"] = df_f["criado_em"].dt.strftime("%d/%m/%Y")
-
-st.dataframe(
-    df_f[["produto", "quantidade", "preco_y", "faturamento", "criado_em"]],
-    use_container_width=True
-)
+    st.dataframe(abc, use_container_width=True)
